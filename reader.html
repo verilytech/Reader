@@ -1,0 +1,141 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Chapter Reader</title>
+  <style>
+    body { font-family: sans-serif; padding: 20px; max-width: 800px; margin: 0 auto; background: #111; color: #eee; }
+    button { padding: 10px 20px; margin: 5px; font-size: 16px; cursor: pointer; background: #333; color: #eee; border: 1px solid #555; border-radius: 6px; }
+    button:hover { background: #444; }
+    textarea { width: 100%; height: 120px; background: #222; color: #eee; border: 1px solid #555; border-radius: 6px; padding: 10px; font-family: monospace; font-size: 13px; box-sizing: border-box; }
+    #status { margin: 10px 0; color: #aaa; font-size: 14px; }
+    #chapter-text { white-space: pre-wrap; background: #1a1a1a; padding: 15px; border-radius: 6px; margin-top: 15px; font-size: 15px; line-height: 1.6; max-height: 400px; overflow-y: auto; }
+  </style>
+</head>
+<body>
+  <h2>Chapter Reader</h2>
+
+  <textarea id="config">{
+  "url": "https://www.empirenovel.com/novel/my-vampire-system/",
+  "start": 400,
+  "end": 2545,
+  "selector": ".chapter-content"
+}</textarea>
+
+  <div>
+    <button onclick="startReading()">▶ Start</button>
+    <button onclick="speechSynthesis.pause()">⏸ Pause</button>
+    <button onclick="speechSynthesis.resume()">▶ Resume</button>
+    <button onclick="stopReading()">⏹ Stop</button>
+    <button onclick="nextChapter()">⏭ Skip</button>
+  </div>
+
+  <div id="status">Idle</div>
+  <div id="chapter-text"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/eruda"></script>
+  <script>eruda.init();</script>
+
+  <script>
+    let config = null;
+    let currentIndex = 0;
+    let stopped = false;
+
+    function setStatus(msg) {
+      document.getElementById('status').textContent = msg;
+    }
+
+    function startReading() {
+      const raw = document.getElementById('config').value.trim();
+      try {
+        config = JSON.parse(raw);
+      } catch(e) {
+        setStatus('Invalid config JSON: ' + e.message);
+        return;
+      }
+      currentIndex = config.start;
+      stopped = false;
+      fetchAndSpeak();
+    }
+
+    function stopReading() {
+      stopped = true;
+      speechSynthesis.cancel();
+      setStatus('Stopped');
+    }
+
+    function nextChapter() {
+      speechSynthesis.cancel();
+      // onend will fire and trigger next chapter automatically
+    }
+
+    function fetchAndSpeak() {
+      if (stopped) return;
+      if (currentIndex > config.end) {
+        setStatus('Done!');
+        return;
+      }
+
+      const url = config.url + currentIndex;
+      setStatus(`Fetching chapter ${currentIndex}...`);
+
+      fetch(url)
+        .then(r => r.text())
+        .then(html => {
+          const parser = new DOMParser();
+          const doc = parser.parseFromString(html, 'text/html');
+          const el = doc.querySelector(config.selector);
+          const text = el ? el.innerText || el.textContent : null;
+
+          if (!text) {
+            setStatus(`Chapter ${currentIndex}: No text found, skipping...`);
+            currentIndex++;
+            fetchAndSpeak();
+            return;
+          }
+
+          document.getElementById('chapter-text').textContent = text;
+          setStatus(`Reading chapter ${currentIndex}...`);
+          speakText(text, () => {
+            currentIndex++;
+            fetchAndSpeak();
+          });
+        })
+        .catch(err => {
+          setStatus(`Error on chapter ${currentIndex}: ${err.message}`);
+        });
+    }
+
+    function speakText(text, onDone) {
+      speechSynthesis.cancel();
+
+      // Chunk text to avoid browser TTS cutoff (~32k chars)
+      const chunks = [];
+      const chunkSize = 4000;
+      for (let i = 0; i < text.length; i += chunkSize) {
+        chunks.push(text.slice(i, i + chunkSize));
+      }
+
+      let chunkIndex = 0;
+
+      function speakNext() {
+        if (stopped) return;
+        if (chunkIndex >= chunks.length) {
+          onDone();
+          return;
+        }
+        const utt = new SpeechSynthesisUtterance(chunks[chunkIndex++]);
+        utt.rate = 1;
+        utt.onend = speakNext;
+        utt.onerror = (e) => {
+          if (e.error !== 'interrupted') setStatus('Speech error: ' + e.error);
+        };
+        speechSynthesis.speak(utt);
+      }
+
+      speakNext();
+    }
+  </script>
+</body>
+</html>
